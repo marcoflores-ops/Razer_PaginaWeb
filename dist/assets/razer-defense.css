@@ -1,0 +1,129 @@
+.defense {
+  overflow: hidden;
+  border: 1px solid #294133;
+  border-radius: 0.875rem;
+  background: #101713;
+  color: #e1f3e6;
+}
+
+.defense [hidden] {
+  display: none;
+}
+
+.defense-hud,
+.defense-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.defense-hud {
+  font-size: clamp(0.69rem, 2.65vw, 0.875rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.defense-hud strong {
+  color: #a6ff8a;
+}
+
+.defense-stage {
+  position: relative;
+  background:
+    linear-gradient(90deg, #6de4a012 1px, transparent 1px) 50% 50% / 32px 32px,
+    linear-gradient(#6de4a012 1px, transparent 1px) 50% 50% / 32px 32px,
+    radial-gradient(ellipse at 50% 15%, #1b422b, #070d0a 72%);
+}
+
+.defense canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.defense canvas:focus-visible,
+.defense button:focus-visible {
+  outline: 2px solid #b5ff8d;
+  outline-offset: -3px;
+}
+
+.defense-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: clamp(0.25rem, 1.5vw, 0.75rem);
+  padding: 0.5rem;
+  background: #07110bd9;
+  text-align: center;
+}
+
+.defense-overlay img {
+  width: auto;
+  height: clamp(1.25rem, 5vw, 2.75rem);
+}
+
+.defense-overlay h3 {
+  color: #b5ff8d;
+  font-size: clamp(1.125rem, 4.3vw, 2rem);
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.defense-overlay p,
+.defense-controls p {
+  color: #c0d9c7;
+  font-size: clamp(0.69rem, 2.6vw, 0.875rem);
+}
+
+.defense button {
+  min-height: 2.25rem;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid #365643;
+  border-radius: 0.45rem;
+  background: #15251b;
+  color: #e1f3e6;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.defense button:disabled {
+  opacity: 0.5;
+}
+
+.defense .defense-action,
+.defense [data-control="fire"] {
+  border-color: #56d935;
+  background: #69e447;
+  color: #10200c;
+}
+
+.defense-touch {
+  display: none;
+  flex: 1;
+  gap: 0.35rem;
+}
+
+.defense-touch button {
+  min-height: 2.75rem;
+  flex: 1;
+  padding-inline: 0.45rem;
+  touch-action: none;
+  user-select: none;
+}
+
+.defense-touch button:active {
+  filter: brightness(1.3);
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .defense-touch {
+    display: flex;
+  }
+
+  .defense-controls .defense-keys {
+    display: none;
+  }
+}

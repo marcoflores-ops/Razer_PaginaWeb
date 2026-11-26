@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Neon Invaders</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;800&display=swap" rel="stylesheet">
+<style>
+  :root { --accent:#44D62C; }
+  html, body { margin:0; height:100%; background:#000; overflow:hidden; touch-action:none;
+    -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+  #wrap { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  #stage { position:relative; }
+  canvas { display:block; }
+  canvas:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  #mute { position:absolute; right:6px; bottom:4px; width:30px; height:22px; border:1px solid rgba(68,214,44,.5);
+    background:transparent; color:var(--accent); font:600 12px/1 Orbitron, monospace; border-radius:4px; cursor:pointer; padding:0; }
+  #touch { display:none; width:100%; max-width:520px; flex-shrink:0; box-sizing:border-box; padding:6px 14px;
+    justify-content:space-between; align-items:center; gap:12px; }
+  #touch .grp { display:flex; gap:12px; }
+  .tbtn { width:clamp(36px, 16vw, 64px); height:clamp(36px, 16vw, 64px); border-radius:50%; border:2px solid var(--accent); background:rgba(68,214,44,.08);
+    color:var(--accent); font:800 22px/1 Orbitron, monospace; box-shadow:0 0 14px rgba(68,214,44,.45), inset 0 0 10px rgba(68,214,44,.2);
+    touch-action:none; }
+  .tbtn.fire { width:clamp(60px, 23vw, 96px); border-radius:36px; font-size:15px; letter-spacing:1px; }
+  .tbtn.on { background:rgba(68,214,44,.35); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <canvas id="game" tabindex="0" aria-label="Juego Neon Invaders"></canvas>
+    <button id="mute" title="Sonido (M)" aria-label="Activar o silenciar sonido">♪</button>
+  </div>
+  <div id="touch">
+    <div class="grp">
+      <button class="tbtn" data-k="left" aria-label="Izquierda">◀</button>
+      <button class="tbtn" data-k="right" aria-label="Derecha">▶</button>
+    </div>
+    <button class="tbtn fire" data-k="fire" aria-label="Disparar">FUEGO</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  /* =========================================================
+     CONFIGURACIÓN
+     - lives: vidas iniciales
+     - unlockScore: puntaje para "desbloquear beneficio" (0 = desactivado)
+     - Se puede sobrescribir por URL: ?meta=5000&vidas=3
+     Eventos que emite (postMessage al sitio padre + CustomEvent en window):
+       { source:'neon-invaders', type:'start' }
+       { source:'neon-invaders', type:'unlock',   score }
+       { source:'neon-invaders', type:'gameover', score, level, unlocked }
+     ========================================================= */
+  const params = new URLSearchParams(location.search);
+  const embedded = window.parent !== window;
+  const CONFIG = {
+    lives: parseInt(params.get('vidas')) || 3,
+    unlockScore: parseInt(params.get('meta')) || 0,
+    postMessageTarget: '*'
+  };
+
+  const BASE_WIDTH = 480, H = 640;
+  let W = BASE_WIDTH;
+  const FLOOR = 612, PLAYER_Y = 578, SHIELD_Y = 492, HUD_H = 40;
+  const C = { green:'#44D62C', cyan:'#22E6FF', magenta:'#FF2BD6', yellow:'#FFE14D', white:'#F2FFF0', red:'#FF3B5C' };
+  const FONT = 'Orbitron, "Segoe UI", monospace';
+
+  const cvs = document.getElementById('game');
+  const ctx = cvs.getContext('2d');
+  const touchBar = document.getElementById('touch');
+  const muteBtn = document.getElementById('mute');
+  const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+  if (isTouch) touchBar.style.display = 'flex';
+
+  /* ---------- Sprites (pixel art original) ---------- */
+  const SPR = {
+    A: [[
+      "....XXX....",
+      "..XXXXXXX..",
+      ".XX.XXX.XX.",
+      "XXXXXXXXXXX",
+      "..X.XXX.X..",
+      ".X.......X.",
+      "X.X.....X.X",
+      "..........."],[
+      "....XXX....",
+      "..XXXXXXX..",
+      ".XX.XXX.XX.",
+      "XXXXXXXXXXX",
+      "..X.XXX.X..",
+      "..X.....X..",
+      ".X.......X.",
+      "..........."]],
+    B: [[
+      "X.........X",
+      ".X..XXX..X.",
+      "..XXXXXXX..",
+      ".XX.XXX.XX.",
+      "XXXXXXXXXXX",
+      "X.XXXXXXX.X",
+      "X.X.....X.X",
+      "...XX.XX..."],[
+      "...........",
+      "X...XXX...X",
+      "X.XXXXXXX.X",
+      "XXX.XXX.XXX",
+      "XXXXXXXXXXX",
+      ".XXXXXXXXX.",
+      "..X.....X..",
+      ".X.......X."]],
+    C: [[
+      "...XXXXX...",
+      ".XXXXXXXXX.",
+      "XX..XXX..XX",
+      "XXXXXXXXXXX",
+      "..XX...XX..",
+      ".XX.XXX.XX.",
+      "XX.......XX",
+      "..........."],[
+      "...XXXXX...",
+      ".XXXXXXXXX.",
+      "XX..XXX..XX",
+      "XXXXXXXXXXX",
+      "...XX.XX...",
+      "..XX...XX..",
+      "...XX.XX...",
+      "..........."]],
+    P: [
+      "......X......",
+      ".....XXX.....",
+      ".....XXX.....",
+      "..X.XXXXX.X..",
+      ".XXXXXXXXXXX.",
+      "XXXXXXXXXXXXX",
+      "XXX.XXXXX.XXX",
+      "XX.........XX"],
+    U: [
+      ".....XXXXXX.....",
+      "...XXXXXXXXXX...",
+      "..XXXXXXXXXXXX..",
+      ".XX.XX.XX.XX.XX.",
+      "XXXXXXXXXXXXXXXX",
+      "..XXX..XX..XXX..",
+      "...X........X..."]
+  };
+  const PX = 3;
+  const TYPE = {
+    A: { color:C.green,   pts:10 },
+    B: { color:C.cyan,    pts:20 },
+    C: { color:C.magenta, pts:30 }
+  };
+
+  let scale = 1, dpr = 1, sprites = {};
+
+  function makeSprite(rows, color, px) {
+    const s = scale * dpr, pad = 7;
+    const w = rows[0].length * px, h = rows.length * px;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil((w + pad * 2) * s);
+    c.height = Math.ceil((h + pad * 2) * s);
+    const g = c.getContext('2d');
+    g.scale(s, s);
+    const paint = () => {
+      for (let y = 0; y < rows.length; y++)
+        for (let x = 0; x < rows[y].length; x++)
+          if (rows[y][x] === 'X') g.fillRect(pad + x * px, pad + y * px, px, px);
+    };
+    g.fillStyle = color; g.shadowColor = color; g.shadowBlur = 9; paint();
+    g.shadowBlur = 0; paint();
+    return { img:c, w, h, pad };
+  }
+
+  function buildSprites() {
+    sprites = {};
+    for (const k of ['A','B','C']) {
+      sprites[k] = SPR[k].map(f => makeSprite(f, TYPE[k].color, PX));
+      sprites[k + 'w'] = SPR[k].map(f => makeSprite(f, C.white, PX));
+    }
+    sprites.P = makeSprite(SPR.P, C.green, PX);
+    sprites.U = makeSprite(SPR.U, C.yellow, PX);
+  }
+
+  function drawSprite(sp, x, y, k = 1) {
+    if (!sp) return;
+    ctx.drawImage(sp.img, x - sp.pad * k, y - sp.pad * k, (sp.w + sp.pad * 2) * k, (sp.h + sp.pad * 2) * k);
+  }
+
+  function resize() {
+    const availW = Math.max(1, window.innerWidth);
+    const availH = Math.max(1, window.innerHeight - touchBar.offsetHeight);
+    const previousWidth = W;
+    scale = Math.min(availW / BASE_WIDTH, availH / H);
+    W = availW / scale;
+    if (previousWidth !== W) {
+      const ratio = W / previousWidth;
+      for (const star of stars) star.x *= ratio;
+      if (player) {
+        for (const objects of [enemies, shields, bullets, eBullets, powerups, particles]) {
+          for (const object of objects) {
+            const halfWidth = (object.w || 0) / 2;
+            object.x = (object.x + halfWidth) * ratio - halfWidth;
+          }
+        }
+        if (ufo) ufo.x *= ratio;
+        player.x = clamp((player.x + player.w / 2) * ratio - player.w / 2, 6, W - 6 - player.w);
+      }
+    }
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cvs.style.width = availW + 'px';
+    cvs.style.height = (H * scale) + 'px';
+    cvs.width = Math.round(W * scale * dpr);
+    cvs.height = Math.round(H * scale * dpr);
+    buildSprites();
+  }
+  window.addEventListener('resize', resize);
+
+  /* ---------- Audio ---------- */
+  let actx = null;
+  let muted = false;
+  try { muted = localStorage.getItem('ni_muted') === '1'; } catch (e) {}
+  const updateMuteBtn = () => { muteBtn.textContent = muted ? '✕' : '♪'; muteBtn.style.opacity = muted ? .5 : 1; };
+  updateMuteBtn();
+
+  function ensureAudio() {
+    if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (actx && actx.state === 'suspended') actx.resume();
+  }
+  function tone(f, d = .08, type = 'square', v = .04, f2) {
+    if (muted || !actx) return;
+    const t0 = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t0);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + d);
+    g.gain.setValueAtTime(v, t0); g.gain.exponentialRampToValueAtTime(.0001, t0 + d);
+    o.connect(g).connect(actx.destination); o.start(t0); o.stop(t0 + d + .02);
+  }
+  function noise(d = .25, v = .08) {
+    if (muted || !actx) return;
+    const len = Math.floor(actx.sampleRate * d), buf = actx.createBuffer(1, len, actx.sampleRate), ch = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = actx.createBufferSource(), g = actx.createGain(), f = actx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 1400;
+    src.buffer = buf; g.gain.value = v; src.connect(f).connect(g).connect(actx.destination); src.start();
+  }
+  const sfx = {
+    shoot: () => tone(880, .09, 'square', .03, 220),
+    hit:   () => { noise(.12, .06); tone(300, .1, 'sawtooth', .03, 80); },
+    boom:  () => { noise(.5, .14); tone(120, .5, 'sawtooth', .05, 30); },
+    ufo:   () => tone(660, .25, 'triangle', .05, 1320),
+    power: () => { tone(523, .08, 'square', .04); setTimeout(() => tone(784, .08, 'square', .04), 70); setTimeout(() => tone(1046, .12, 'square', .04), 140); },
+    march: i => tone([110, 98, 87, 82][i % 4], .07, 'square', .035),
+    unlock:() => [523,659,784,1046,1318].forEach((f, i) => setTimeout(() => tone(f, .14, 'square', .05), i * 90))
+  };
+
+  /* ---------- Utilidades ---------- */
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const hit = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+  function emit(type, data = {}) {
+    const msg = Object.assign({ source:'neon-invaders', type }, data);
+    try { if (window.parent !== window) window.parent.postMessage(msg, CONFIG.postMessageTarget); } catch (e) {}
+    window.dispatchEvent(new CustomEvent('neoninvaders:' + type, { detail: msg }));
+  }
+
+  /* ---------- Estado ---------- */
+  let state = 'menu', stateT = 0;
+  let score = 0, level = 1, lives = 3, unlocked = false, newRecord = false;
+  let hi = 0;
+  try { hi = parseInt(localStorage.getItem('ni_hi')) || 0; } catch (e) {}
+  let player, bullets, eBullets, enemies, shields, particles = [], powerups, ufo, ufoTimer, eFireT, total;
+  let fleet = { dir:1, frame:0, animT:0, step:0 };
+  let shake = 0, banner = null, gt = 0;
+
+  const stars = Array.from({ length: 90 }, () => ({ x: rand(0, W), y: rand(0, H), s: rand(.6, 1.8), v: rand(6, 30) }));
+
+  function newGame() {
+    score = 0; level = 1; lives = CONFIG.lives; unlocked = false; newRecord = false;
+    player = { x: W / 2 - 19.5, y: PLAYER_Y, w: 39, h: 24, cd: 0, inv: 0, rapid: 0, triple: 0 };
+    particles = [];
+    startLevel();
+    setState('playing');
+    emit('start');
+  }
+
+  function hpFor(t) {
+    if (t === 'C') return 1 + (level >= 3) + (level >= 6);
+    if (t === 'B') return 1 + (level >= 5) + (level >= 8);
+    return 1 + (level >= 7);
+  }
+
+  function startLevel() {
+    bullets = []; eBullets = []; powerups = []; ufo = null;
+    ufoTimer = rand(10, 20);
+    eFireT = 1.6;
+    enemies = [];
+    const rows = ['C', 'B', 'B', 'A', 'A'], cols = 9, gx = 44 * W / BASE_WIDTH, gy = 34;
+    const sx = (W - (cols - 1) * gx - 33) / 2;
+    const sy = 66 + Math.min(level - 1, 6) * 10;
+    rows.forEach((t, r) => {
+      for (let c = 0; c < cols; c++) {
+        const hp = hpFor(t);
+        enemies.push({ type: t, x: sx + c * gx, y: sy + r * gy, w: 33, h: 24, hp, max: hp, flash: 0, col: c });
+      }
+    });
+    total = enemies.length;
+    fleet.dir = 1; fleet.frame = 0; fleet.animT = 0;
+    shields = [0, 1, 2, 3].map(k => makeShield(W / 5 * (k + 1) - 22, SHIELD_Y));
+    banner = { text: 'OLEADA ' + level, sub: level > 1 ? 'Los invasores se vuelven más resistentes' : 'Defiende la base', t: 1.8, color: C.green };
+  }
+
+  function makeShield(x, y) {
+    const cw = 22, ch = 16, cells = new Uint8Array(cw * ch), cx = cw / 2 - .5;
+    for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) {
+      let on = 1;
+      if (j < 4 && (i < 4 - j || i > cw - 1 - (4 - j))) on = 0;
+      const d = Math.abs(i - cx);
+      if ((j >= 11 && d < 4.5) || (j === 10 && d < 3.5) || (j === 9 && d < 2.5)) on = 0;
+      cells[j * cw + i] = on;
+    }
+    return { x, y, cw, ch, cs: 2, cells, w: cw * 2, h: ch * 2 };
+  }
+
+  function shieldHitPoint(px, py, radius) {
+    for (const s of shields) {
+      if (px < s.x || px >= s.x + s.w || py < s.y || py >= s.y + s.h) continue;
+      const i = Math.floor((px - s.x) / s.cs), j = Math.floor((py - s.y) / s.cs);
+      if (!s.cells[j * s.cw + i]) continue;
+      for (let dj = -radius; dj <= radius; dj++) for (let di = -radius; di <= radius; di++) {
+        const ii = i + di, jj = j + dj;
+        if (ii < 0 || jj < 0 || ii >= s.cw || jj >= s.ch) continue;
+        if (di * di + dj * dj <= radius * radius && Math.random() < .8) s.cells[jj * s.cw + ii] = 0;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function eraseShieldRect(r) {
+    for (const s of shields) {
+      if (!hit(r, s)) continue;
+      for (let j = 0; j < s.ch; j++) for (let i = 0; i < s.cw; i++) {
+        const cx = s.x + i * s.cs, cy = s.y + j * s.cs;
+        if (cx + s.cs > r.x && cx < r.x + r.w && cy + s.cs > r.y && cy < r.y + r.h) s.cells[j * s.cw + i] = 0;
+      }
+    }
+  }
+
+  function setState(s) { state = s; stateT = 0; }
+
+  function addScore(n) {
+    score += n;
+    if (CONFIG.unlockScore > 0 && !unlocked && score >= CONFIG.unlockScore) {
+      unlocked = true;
+      banner = { text: '¡BENEFICIO DESBLOQUEADO!', sub: 'Sigue jugando y supera tu récord', t: 2.6, color: C.yellow };
+      sfx.unlock();
+      emit('unlock', { score });
+    }
+  }
+
+  function explode(x, y, color, n = 14, spd = 130) {
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, Math.PI * 2), v = rand(.3, 1) * spd, life = rand(.3, .7);
+      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life, max: life, color, size: rand(1.5, 3.5) });
+    }
+  }
+  function floatText(x, y, text, color) {
+    particles.push({ kind: 'text', x, y, vx: 0, vy: -30, life: 1, max: 1, text, color });
+  }
+
+  function shoot() {
+    const cx = player.x + player.w / 2 - 1.5;
+    bullets.push({ x: cx, y: player.y - 10, w: 3, h: 12, vx: 0, vy: -540 });
+    if (player.triple > 0) {
+      bullets.push({ x: cx, y: player.y - 6, w: 3, h: 12, vx: -110, vy: -520 });
+      bullets.push({ x: cx, y: player.y - 6, w: 3, h: 12, vx: 110, vy: -520 });
+    }
+    player.cd = player.rapid > 0 ? .13 : .34;
+    sfx.shoot();
+  }
+
+  function playerHit() {
+    lives--;
+    explode(player.x + player.w / 2, player.y + 12, C.green, 40, 200);
+    sfx.boom(); shake = .45;
+    eBullets = [];
+    player.inv = 2.2; player.rapid = 0; player.triple = 0;
+    if (lives <= 0) gameOver();
+  }
+
+  function gameOver() {
+    if (score > hi) { hi = score; newRecord = true; try { localStorage.setItem('ni_hi', hi); } catch (e) {} }
+    setState('gameover');
+    emit('gameover', { score, level, unlocked });
+  }
+
+  /* ---------- Input ---------- */
+  const keys = { left: false, right: false, fire: false };
+  const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', Space: 'fire', ArrowUp: 'fire', KeyW: 'fire' };
+
+  function primary() {
+    ensureAudio();
+    if (state === 'menu') newGame();
+    else if (state === 'gameover' && stateT > 1.2) newGame();
+    else if (state === 'paused') setState('playing');
+  }
+  function togglePause() {
+    if (state === 'playing') setState('paused');
+    else if (state === 'paused') setState('playing');
+  }
+  function toggleMute() {
+    muted = !muted; updateMuteBtn();
+    try { localStorage.setItem('ni_muted', muted ? '1' : '0'); } catch (e) {}
+  }
+
+  window.addEventListener('keydown', e => {
+    if (e.target instanceof HTMLButtonElement) return;
+    const k = KEYMAP[e.code];
+    if (k) { keys[k] = true; e.preventDefault(); }
+    if ((e.code === 'Space' || e.code === 'Enter') && !e.repeat && state !== 'playing') primary();
+    if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+    if (e.code === 'KeyM') toggleMute();
+  });
+  window.addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) keys[k] = false; });
+  window.addEventListener('blur', () => { keys.left = keys.right = keys.fire = false; });
+
+  cvs.addEventListener('pointerdown', e => { cvs.focus(); primary(); e.preventDefault(); });
+  muteBtn.addEventListener('click', e => { e.stopPropagation(); ensureAudio(); toggleMute(); cvs.focus(); });
+
+  touchBar.querySelectorAll('.tbtn').forEach(btn => {
+    const k = btn.dataset.k;
+    const on = e => { e.preventDefault(); ensureAudio(); keys[k] = true; btn.classList.add('on'); if (state !== 'playing') primary(); try { btn.setPointerCapture(e.pointerId); } catch (_) {} };
+    const off = e => { e.preventDefault(); keys[k] = false; btn.classList.remove('on'); };
+    btn.addEventListener('pointerdown', on);
+    btn.addEventListener('pointerup', off);
+    btn.addEventListener('pointercancel', off);
+    btn.addEventListener('lostpointercapture', off);
+    btn.addEventListener('contextmenu', e => e.preventDefault());
+  });
+
+  document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'playing') setState('paused'); });
+
+  /* ---------- Update ---------- */
+  function update(dt) {
+    gt += dt; stateT += dt;
+    for (const s of stars) { s.y += s.v * dt; if (s.y > H) { s.y = 0; s.x = rand(0, W); } }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .97; p.vy *= .97; p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    if (shake > 0) shake -= dt;
+    if (state === 'paused' || state === 'menu') return;
+    if (banner) { banner.t -= dt; if (banner.t <= 0) banner = null; }
+
+    if (state === 'levelclear') {
+      if (stateT > 2.2) { level++; startLevel(); setState('playing'); }
+      return;
+    }
+    if (state !== 'playing') return;
+
+    // Jugador
+    const mv = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+    player.x = clamp(player.x + mv * 230 * (W / BASE_WIDTH) * dt, 6, W - 6 - player.w);
+    player.cd -= dt; player.inv -= dt; player.rapid -= dt; player.triple -= dt;
+    if (keys.fire && player.cd <= 0) shoot();
+
+    // Balas del jugador
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      if (b.y + b.h < HUD_H || b.x < -10 || b.x > W + 10) bullets.splice(i, 1);
+    }
+
+    // Flota
+    const alive = enemies.length;
+    const frac = 1 - alive / total;
+    const speed = (22 + level * 5) * (1 + frac * 2.8);
+    let minX = Infinity, maxX = -Infinity, maxY = 0;
+    for (const e of enemies) {
+      e.x += fleet.dir * speed * (W / BASE_WIDTH) * dt;
+      if (e.flash > 0) e.flash -= dt;
+      minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x + e.w); maxY = Math.max(maxY, e.y + e.h);
+    }
+    if ((fleet.dir > 0 && maxX > W - 8) || (fleet.dir < 0 && minX < 8)) {
+      const over = fleet.dir > 0 ? maxX - (W - 8) : minX - 8;
+      fleet.dir *= -1;
+      for (const e of enemies) { e.x -= over; e.y += 14; }
+      maxY += 14;
+    }
+    fleet.animT += dt * speed / 16;
+    if (fleet.animT >= 1) { fleet.animT = 0; fleet.frame ^= 1; sfx.march(fleet.step++); }
+    for (const e of enemies) if (e.y + e.h > SHIELD_Y) eraseShieldRect(e);
+    if (maxY >= PLAYER_Y) { lives = 0; explode(player.x + player.w / 2, player.y + 12, C.green, 40, 200); sfx.boom(); shake = .5; gameOver(); return; }
+
+    // Disparo enemigo
+    eFireT -= dt;
+    if (eFireT <= 0 && alive) {
+      eFireT = rand(.45, 1.1) * Math.max(.32, 1.25 - level * .08) * (alive < 10 ? .8 : 1);
+      const bottom = {};
+      for (const e of enemies) if (!bottom[e.col] || e.y > bottom[e.col].y) bottom[e.col] = e;
+      const shooters = Object.values(bottom);
+      let s;
+      if (Math.random() < .45) {
+        const pc = player.x + player.w / 2;
+        s = shooters.reduce((a, b) => Math.abs(b.x + b.w / 2 - pc) < Math.abs(a.x + a.w / 2 - pc) ? b : a);
+      } else s = shooters[Math.floor(Math.random() * shooters.length)];
+      const fire = (ox) => eBullets.push({ x: s.x + s.w / 2 - 1.5 + ox, y: s.y + s.h, w: 3, h: 10, vy: 170 + level * 14, color: TYPE[s.type].color, zig: Math.random() < .5 });
+      fire(0);
+      if (level >= 4 && Math.random() < .25) { const s2 = shooters[Math.floor(Math.random() * shooters.length)]; s = s2; fire(0); }
+    }
+
+    // Balas enemigas
+    for (let i = eBullets.length - 1; i >= 0; i--) {
+      const b = eBullets[i];
+      b.y += b.vy * dt;
+      if (b.y > FLOOR) { explode(b.x, FLOOR, b.color, 5, 50); eBullets.splice(i, 1); continue; }
+      if (shieldHitPoint(b.x + 1.5, b.y + b.h, 2)) { explode(b.x, b.y + b.h, C.green, 5, 60); eBullets.splice(i, 1); continue; }
+      if (player.inv <= 0 && hit(b, { x: player.x + 3, y: player.y + 3, w: player.w - 6, h: player.h - 3 })) {
+        eBullets.splice(i, 1); playerHit(); if (state !== 'playing') return; break;
+      }
+    }
+
+    // Colisiones bala jugador
+    outer: for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      for (let j = eBullets.length - 1; j >= 0; j--) {
+        if (hit(b, eBullets[j])) { explode(b.x, b.y, C.white, 6, 70); bullets.splice(i, 1); eBullets.splice(j, 1); continue outer; }
+      }
+      if (shieldHitPoint(b.x + 1.5, b.y, 2) || shieldHitPoint(b.x + 1.5, b.y + b.h / 2, 2)) {
+        explode(b.x, b.y, C.green, 5, 60); bullets.splice(i, 1); continue;
+      }
+      for (let j = enemies.length - 1; j >= 0; j--) {
+        const e = enemies[j];
+        if (!hit(b, e)) continue;
+        bullets.splice(i, 1);
+        e.hp--; e.flash = .09;
+        if (e.hp <= 0) {
+          enemies.splice(j, 1);
+          const pts = Math.round(TYPE[e.type].pts * e.max * (1 + (level - 1) * .5));
+          addScore(pts);
+          explode(e.x + e.w / 2, e.y + e.h / 2, TYPE[e.type].color);
+          sfx.hit();
+          const r = Math.random();
+          if (powerups.length < 1 && r < .06) powerups.push({ x: e.x + 5, y: e.y, w: 24, h: 16, vy: 85, type: r < .008 && lives < 5 ? 'L' : (Math.random() < .5 ? 'R' : 'T') });
+        } else {
+          explode(b.x, b.y, TYPE[e.type].color, 5, 60);
+          tone(1200, .04, 'square', .02);
+        }
+        continue outer;
+      }
+      if (ufo && hit(b, ufo)) {
+        bullets.splice(i, 1);
+        const pts = [100, 150, 200, 300][Math.floor(Math.random() * 4)] * level;
+        addScore(pts);
+        explode(ufo.x + ufo.w / 2, ufo.y + 10, C.yellow, 30, 180);
+        floatText(ufo.x + ufo.w / 2, ufo.y + 10, '+' + pts, C.yellow);
+        sfx.boom(); ufo = null;
+      }
+    }
+
+    // OVNI
+    if (!ufo) {
+      ufoTimer -= dt;
+      if (ufoTimer <= 0 && alive > 4) {
+        const dir = Math.random() < .5 ? 1 : -1;
+        ufo = { x: dir > 0 ? -50 : W + 2, y: 46, w: 48, h: 21, dir, v: 85 + level * 6 };
+        ufoTimer = rand(14, 24); sfx.ufo();
+      }
+    } else {
+      ufo.x += ufo.dir * ufo.v * dt;
+      if (ufo.x > W + 60 || ufo.x < -60) ufo = null;
+    }
+
+    // Potenciadores
+    for (let i = powerups.length - 1; i >= 0; i--) {
+      const p = powerups[i];
+      p.y += p.vy * dt;
+      if (p.y > FLOOR) { powerups.splice(i, 1); continue; }
+      if (hit(p, player)) {
+        powerups.splice(i, 1); sfx.power();
+        const cx = player.x + player.w / 2;
+        if (p.type === 'R') { player.rapid = 9; floatText(cx, player.y - 10, 'DISPARO RÁPIDO', C.cyan); }
+        if (p.type === 'T') { player.triple = 9; floatText(cx, player.y - 10, 'DISPARO TRIPLE', C.magenta); }
+        if (p.type === 'L') { lives++; floatText(cx, player.y - 10, '+1 VIDA', C.green); }
+      }
+    }
+
+    if (!enemies.length) {
+      const bonus = 500 * level;
+      addScore(bonus);
+      banner = { text: 'OLEADA SUPERADA', sub: 'Bono +' + bonus, t: 2.2, color: C.cyan };
+      sfx.unlock();
+      setState('levelclear');
+    }
+  }
+
+  /* ---------- Render ---------- */
+  function glowText(str, x, y, size, color, align = 'center', weight = 800, blur = 14) {
+    ctx.font = `${weight} ${size}px ${FONT}`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.shadowColor = color; ctx.shadowBlur = blur; ctx.fillStyle = color;
+    ctx.fillText(str, x, y);
+    ctx.shadowBlur = 0;
+  }
+
+  function drawBackground() {
+    ctx.fillStyle = '#020604'; ctx.fillRect(0, 0, W, H);
+    const g = ctx.createRadialGradient(W / 2, H * .45, 40, W / 2, H * .45, H * .8);
+    g.addColorStop(0, 'rgba(68,214,44,.07)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    for (const s of stars) { ctx.fillStyle = `rgba(200,255,210,${.25 + s.s * .3})`; ctx.fillRect(s.x, s.y, s.s, s.s); }
+    // rejilla de piso
+    ctx.strokeStyle = 'rgba(68,214,44,.12)'; ctx.lineWidth = 1;
+    for (let x = -W; x < W * 2; x += 40) {
+      ctx.beginPath(); ctx.moveTo(W / 2 + (x - W / 2) * .35, FLOOR); ctx.lineTo(x, H); ctx.stroke();
+    }
+  }
+
+  function drawHUD() {
+    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, W, HUD_H);
+    ctx.strokeStyle = 'rgba(68,214,44,.45)'; ctx.beginPath(); ctx.moveTo(0, HUD_H); ctx.lineTo(W, HUD_H); ctx.stroke();
+    glowText('PUNTOS', 14, 11, 15, C.white, 'left', 500, 0);
+    glowText(String(score).padStart(6, '0'), 14, 29, 20, C.green, 'left', 800, 4);
+    glowText('RÉCORD', W / 2, 11, 15, C.white, 'center', 500, 0);
+    glowText(String(Math.max(hi, score)).padStart(6, '0'), W / 2, 29, 20, C.cyan, 'center', 800, 4);
+    glowText('OLEADA', W - 14, 11, 15, C.white, 'right', 500, 0);
+    glowText(String(level).padStart(2, '0'), W - 14, 29, 20, C.magenta, 'right', 800, 4);
+    // piso + vidas
+    ctx.shadowColor = C.green; ctx.shadowBlur = 10; ctx.fillStyle = C.green;
+    ctx.fillRect(0, FLOOR, W, 2); ctx.shadowBlur = 0;
+    for (let i = 0; i < Math.min(lives, 6); i++) drawSprite(sprites.P, 12 + i * 30, FLOOR + 9, .55);
+    if (CONFIG.unlockScore > 0) {
+      const p = clamp(score / CONFIG.unlockScore, 0, 1);
+      const bx = 200, bw = 200, by = FLOOR + 12;
+      ctx.fillStyle = 'rgba(255,225,77,.15)'; ctx.fillRect(bx, by, bw, 6);
+      ctx.shadowColor = C.yellow; ctx.shadowBlur = 8; ctx.fillStyle = C.yellow; ctx.fillRect(bx, by, bw * p, 6); ctx.shadowBlur = 0;
+      glowText(unlocked ? 'META ✓' : 'META', bx - 8, by + 3, 9, C.yellow, 'right', 500, 0);
+    }
+  }
+
+  function drawWorld() {
+    // Escudos
+    ctx.fillStyle = 'rgba(68,214,44,.85)';
+    for (const s of shields) for (let j = 0; j < s.ch; j++) for (let i = 0; i < s.cw; i++)
+      if (s.cells[j * s.cw + i]) ctx.fillRect(s.x + i * s.cs, s.y + j * s.cs, s.cs, s.cs);
+
+    // Enemigos
+    for (const e of enemies) {
+      const spr = e.flash > 0 ? sprites[e.type + 'w'][fleet.frame] : sprites[e.type][fleet.frame];
+      ctx.globalAlpha = e.max > 1 ? .55 + .45 * (e.hp / e.max) : 1;
+      drawSprite(spr, e.x, e.y);
+      ctx.globalAlpha = 1;
+      if (e.max > 1 && e.hp > 1) {
+        ctx.fillStyle = C.white;
+        for (let k = 0; k < e.hp - 1; k++) ctx.fillRect(e.x + e.w / 2 - (e.hp - 2) * 3 + k * 6 - 1, e.y - 5, 2, 2);
+      }
+    }
+    if (ufo) drawSprite(sprites.U, ufo.x, ufo.y);
+
+    // Jugador
+    if (state !== 'gameover' && (player.inv <= 0 || Math.floor(gt * 12) % 2)) {
+      drawSprite(sprites.P, player.x, player.y);
+      if (player.rapid > 0 || player.triple > 0) {
+        ctx.strokeStyle = player.triple > 0 ? C.magenta : C.cyan; ctx.globalAlpha = .5 + .3 * Math.sin(gt * 10);
+        ctx.beginPath(); ctx.ellipse(player.x + player.w / 2, player.y + 12, 28, 18, 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+    }
+
+    // Balas
+    for (const b of bullets) {
+      ctx.fillStyle = 'rgba(68,214,44,.35)'; ctx.fillRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
+      ctx.fillStyle = C.white; ctx.fillRect(b.x, b.y, b.w, b.h);
+    }
+    for (const b of eBullets) {
+      ctx.fillStyle = b.color;
+      if (b.zig) for (let k = 0; k < 3; k++) ctx.fillRect(b.x + ((Math.floor(b.y / 5) + k) % 2 ? 2 : -2), b.y + k * 3.4, 3, 3.4);
+      else { ctx.globalAlpha = .4; ctx.fillRect(b.x - 2, b.y, b.w + 4, b.h); ctx.globalAlpha = 1; ctx.fillRect(b.x, b.y, b.w, b.h); }
+    }
+
+    // Potenciadores
+    for (const p of powerups) {
+      const col = p.type === 'R' ? C.cyan : p.type === 'T' ? C.magenta : C.green;
+      ctx.shadowColor = col; ctx.shadowBlur = 12; ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.strokeRect(p.x, p.y, p.w, p.h); ctx.shadowBlur = 0; ctx.lineWidth = 1;
+      glowText(p.type === 'L' ? '+' : p.type, p.x + p.w / 2, p.y + p.h / 2 + 1, 11, col, 'center', 800, 6);
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      if (p.kind === 'text') glowText(p.text, p.x, p.y, 12, p.color, 'center', 800, 8);
+      else { ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size); }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawOverlay() {
+    if (banner && (state === 'playing' || state === 'levelclear')) {
+      const a = clamp(banner.t * 2, 0, 1);
+      ctx.globalAlpha = a;
+      glowText(banner.text, W / 2, H * .5, banner.text.length > 16 ? 20 : 28, banner.color);
+      if (banner.sub) glowText(banner.sub, W / 2, H * .5 + 30, 11, C.white, 'center', 500, 0);
+      ctx.globalAlpha = 1;
+    }
+    const blink = Math.floor(gt * 2) % 2 === 0;
+    if (state === 'menu') {
+      ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
+      glowText('NEON', W / 2, 111, 64, C.green, 'center', 800, 24);
+      glowText('INVADERS', W / 2, 172, 48, C.cyan, 'center', 800, 22);
+      const rows = [['U', '= ???', C.yellow], ['C', '= 30 PTS', C.magenta], ['B', '= 20 PTS', C.cyan], ['A', '= 10 PTS', C.green]];
+      rows.forEach(([k, t, c], i) => {
+        const y = 250 + i * 46;
+        const spr = k === 'U' ? sprites.U : sprites[k][Math.floor(Math.abs(gt) * 2) & 1];
+        drawSprite(spr, W / 2 - 80 - spr.w / 2, y - spr.h / 2);
+        glowText(t, W / 2 - 30, y, 18, c, 'left', 800, 8);
+      });
+      if (blink) glowText(isTouch ? 'TOCA PARA JUGAR' : 'PRESIONA ESPACIO PARA JUGAR', W / 2, 470, 18, C.white, 'center', 800, 10);
+      if (!embedded) {
+        glowText(isTouch ? '◀ ▶ mover  ·  FUEGO disparar' : '← → mover  ·  ESPACIO disparar  ·  P pausa  ·  M sonido', W / 2, 505, 13, 'rgba(242,255,240,.7)', 'center', 500, 0);
+      }
+      if (CONFIG.unlockScore > 0) glowText('Alcanza ' + CONFIG.unlockScore.toLocaleString('es-CO') + ' puntos para desbloquear tu beneficio', W / 2, 540, 10, C.yellow, 'center', 500, 6);
+      if (hi > 0) glowText('RÉCORD  ' + String(hi).padStart(6, '0'), W / 2, 575, 12, C.cyan, 'center', 800, 6);
+    }
+    if (state === 'paused') {
+      ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, W, H);
+      glowText('PAUSA', W / 2, H / 2 - 10, 36, C.green);
+      glowText(isTouch ? 'Toca para continuar' : 'P o clic para continuar', W / 2, H / 2 + 30, 11, C.white, 'center', 500, 0);
+    }
+    if (state === 'gameover') {
+      ctx.fillStyle = `rgba(0,0,0,${Math.min(.7, stateT)})`; ctx.fillRect(0, 0, W, H);
+      glowText('FIN DEL JUEGO', W / 2, 200, 32, C.red, 'center', 800, 20);
+      glowText('PUNTAJE', W / 2, 265, 11, 'rgba(242,255,240,.7)', 'center', 500, 0);
+      glowText(String(score).padStart(6, '0'), W / 2, 295, 34, C.green);
+      glowText('Oleada alcanzada: ' + level, W / 2, 335, 12, C.cyan, 'center', 500, 0);
+      if (newRecord) glowText('¡NUEVO RÉCORD!', W / 2, 372, 16, C.yellow);
+      if (CONFIG.unlockScore > 0) glowText(unlocked ? 'Beneficio desbloqueado ✓' : 'Te faltaron ' + (CONFIG.unlockScore - score).toLocaleString('es-CO') + ' puntos', W / 2, 405, 12, C.yellow, 'center', 500, 6);
+      if (stateT > 1.2 && blink) glowText(isTouch ? 'TOCA PARA REINTENTAR' : 'ESPACIO PARA REINTENTAR', W / 2, 470, 14, C.white, 'center', 800, 10);
+    }
+  }
+
+  function render() {
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    drawBackground();
+    ctx.save();
+    if (shake > 0) ctx.translate(rand(-1, 1) * shake * 10, rand(-1, 1) * shake * 10);
+    if (state !== 'menu') drawWorld();
+    drawParticles();
+    ctx.restore();
+    if (state !== 'menu') drawHUD();
+    drawOverlay();
+  }
+
+  /* ---------- Loop ---------- */
+  let last = performance.now();
+  function frame(now) {
+    const dt = clamp((now - last) / 1000, 0, .033); last = now;
+    update(dt); render();
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(buildSprites);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
